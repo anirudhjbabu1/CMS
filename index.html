@@ -28,14 +28,30 @@
             border: 3px solid #f3f3f3;
             border-radius: 50%;
             border-top: 3px solid #004098;
-            width: 24px;
-            height: 24px;
+            width: 16px;
+            height: 16px;
             -webkit-animation: spin 1s linear infinite;
             animation: spin 1s linear infinite;
         }
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
+        }
+        
+        /* Custom Scrollbar for Queue */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
         }
     </style>
 </head>
@@ -46,8 +62,7 @@
         const { useState, useEffect, useRef } = React;
 
         const App = () => {
-            // SECURITY UPDATE: 
-            // We no longer hardcode ANY keys in the source code.
+            // API Keys State
             const [googleClientId, setGoogleClientId] = useState(localStorage.getItem('kaist_google_client_id') || '');
             const [geminiApiKey, setGeminiApiKey] = useState(localStorage.getItem('kaist_gemini_api_key') || '');
             const [showSettings, setShowSettings] = useState(false);
@@ -55,32 +70,35 @@
             const [tempClientId, setTempClientId] = useState(googleClientId);
             const [tempGeminiKey, setTempGeminiKey] = useState(geminiApiKey);
 
-            // Form State
-            const [formData, setFormData] = useState({
+            // Persistent User Profile State
+            const [userProfile, setUserProfile] = useState(() => {
+                const saved = localStorage.getItem('kaist_user_profile');
+                return saved ? JSON.parse(saved) : { yourName: '', yourBackground: '' };
+            });
+
+            // Professor Queue State
+            const [professors, setProfessors] = useState([]);
+            
+            // Add Professor Form State
+            const [profForm, setProfForm] = useState({
                 profName: '',
                 profEmail: '',
                 researchArea: '',
-                specificInterest: '',
-                yourName: '',
-                yourBackground: '',
+                specificInterest: ''
             });
 
-            // Generated Email State
-            const [generatedEmail, setGeneratedEmail] = useState({
-                subject: '',
-                body: ''
-            });
-
-            const [isGenerating, setIsGenerating] = useState(false);
-            const [error, setError] = useState(null);
             const [notification, setNotification] = useState(null);
             
             // Gmail Auth State
             const [accessToken, setAccessToken] = useState(null);
             const [tokenClient, setTokenClient] = useState(null);
-            const [isSending, setIsSending] = useState(false);
 
-            // Initialize Google Identity Services only when a valid Client ID is provided
+            // Save user profile to local storage whenever it changes
+            useEffect(() => {
+                localStorage.setItem('kaist_user_profile', JSON.stringify(userProfile));
+            }, [userProfile]);
+
+            // Initialize Google Identity Services
             useEffect(() => {
                 if (!googleClientId) return;
 
@@ -91,11 +109,11 @@
                             scope: 'https://www.googleapis.com/auth/gmail.send',
                             callback: (response) => {
                                 if (response.error) {
-                                    setError('Failed to authenticate with Google: ' + response.error);
+                                    showNotification('Failed to authenticate with Google: ' + response.error, 'error');
                                     return;
                                 }
                                 setAccessToken(response.access_token);
-                                showNotification('Successfully connected to Gmail!');
+                                showNotification('Successfully connected to Gmail!', 'success');
                             },
                         });
                         setTokenClient(client);
@@ -113,9 +131,8 @@
                 setGoogleClientId(tempClientId.trim());
                 setGeminiApiKey(tempGeminiKey.trim());
                 setShowSettings(false);
-                showNotification('Security settings saved locally.');
+                showNotification('Security settings saved locally.', 'success');
                 
-                // Force reload of GSI client if it was connected and Client ID changed
                 if (accessToken && tempClientId.trim() !== googleClientId) {
                     handleGmailLogout();
                 }
@@ -124,7 +141,7 @@
             const handleGmailLogin = () => {
                 if (!googleClientId) {
                     setShowSettings(true);
-                    setError("Please configure your Google Client ID first.");
+                    showNotification("Please configure your Google Client ID first.", "error");
                     return;
                 }
                 if (tokenClient) {
@@ -136,48 +153,79 @@
                 if (accessToken && window.google) {
                     window.google.accounts.oauth2.revoke(accessToken, () => {
                         setAccessToken(null);
-                        showNotification('Disconnected from Gmail.');
+                        showNotification('Disconnected from Gmail.', 'success');
                     });
                 } else {
                     setAccessToken(null);
                 }
             };
 
-            const handleInputChange = (e) => {
+            const handleProfileChange = (e) => {
                 const { name, value } = e.target;
-                setFormData(prev => ({ ...prev, [name]: value }));
+                setUserProfile(prev => ({ ...prev, [name]: value }));
             };
 
-            const handleEmailChange = (e) => {
+            const handleProfFormChange = (e) => {
                 const { name, value } = e.target;
-                setGeneratedEmail(prev => ({ ...prev, [name]: value }));
+                setProfForm(prev => ({ ...prev, [name]: value }));
             };
 
-            const generateEmail = async (e) => {
+            const handleAddProfessor = (e) => {
                 e.preventDefault();
+                if (!profForm.profName || !profForm.profEmail) return;
                 
+                const newProf = {
+                    ...profForm,
+                    id: Date.now().toString(),
+                    status: 'pending', // pending, generating, drafted, sending, sent, error
+                    subject: '',
+                    body: '',
+                    error: null
+                };
+                
+                setProfessors(prev => [newProf, ...prev]);
+                setProfForm({ profName: '', profEmail: '', researchArea: '', specificInterest: '' });
+                showNotification("Professor added to the queue.", "success");
+            };
+
+            const removeProfessor = (id) => {
+                setProfessors(prev => prev.filter(p => p.id !== id));
+            };
+
+            const updateProfessorItem = (id, field, value) => {
+                setProfessors(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p));
+            };
+
+            const generateSingleDraft = async (profId) => {
                 if (!geminiApiKey) {
-                    setError("Please configure your Gemini API Key in Settings to generate emails.");
+                    showNotification("Please configure your Gemini API Key in Settings.", "error");
                     setShowSettings(true);
-                    return;
+                    return false;
+                }
+                
+                if (!userProfile.yourName || !userProfile.yourBackground) {
+                    showNotification("Please fill out Your Profile first.", "error");
+                    return false;
                 }
 
-                setIsGenerating(true);
-                setError(null);
+                const prof = professors.find(p => p.id === profId);
+                if (!prof) return false;
+
+                updateProfessorItem(profId, 'status', 'generating');
+                updateProfessorItem(profId, 'error', null);
 
                 const prompt = `
                     You are an expert academic career advisor. Please write a highly professional, polite, and persuasive cold email for a prospective Master's student reaching out to a professor at KAIST (Korea Advanced Institute of Science and Technology) for research opportunities.
                     
-                    Here are the details to include and contextualize:
-                    - Professor's Name: ${formData.profName}
-                    - Professor's Research Area / Lab: ${formData.researchArea}
-                    - Student's Name: ${formData.yourName}
-                    - Student's Background: ${formData.yourBackground}
-                    - Student's Specific Interest in the Professor's work: ${formData.specificInterest || 'I am highly interested in your recent publications and the innovative work being done in your lab.'}
+                    Details to include:
+                    - Professor's Name: ${prof.profName}
+                    - Professor's Research Area / Lab: ${prof.researchArea || 'Computer Science / Engineering'}
+                    - Student's Name: ${userProfile.yourName}
+                    - Student's Background: ${userProfile.yourBackground}
+                    - Specific Interest in this Professor: ${prof.specificInterest || 'I am highly interested in your recent publications and the innovative work being done in your lab.'}
 
-                    The tone should be formal, enthusiastic, and concise. Do not use placeholders like [Insert Date] unless absolutely necessary. Write it ready to send. Keep it to 3-4 short paragraphs, standard for academic cold emails.
-
-                    Return the response as a JSON object with two fields: "subject" and "body".
+                    The tone should be formal, enthusiastic, and concise. Write it ready to send. Keep it to 3-4 short paragraphs.
+                    Return the response strictly as a JSON object with two string fields: "subject" and "body".
                 `;
 
                 try {
@@ -206,41 +254,46 @@
 
                     const result = await response.json();
                     
-                    if (!response.ok) {
-                        throw new Error(result.error?.message || "Failed to call Gemini API");
-                    }
+                    if (!response.ok) throw new Error(result.error?.message || "API Error");
                     
                     if (result.candidates && result.candidates.length > 0) {
-                        const jsonText = result.candidates[0].content.parts[0].text;
-                        const parsedEmail = JSON.parse(jsonText);
-                        setGeneratedEmail({
-                            subject: parsedEmail.subject,
-                            body: parsedEmail.body
-                        });
-                        showNotification("Email generated successfully! You can now review and edit it.");
+                        const parsedEmail = JSON.parse(result.candidates[0].content.parts[0].text);
+                        setProfessors(prev => prev.map(p => 
+                            p.id === profId ? { ...p, subject: parsedEmail.subject, body: parsedEmail.body, status: 'drafted' } : p
+                        ));
+                        return true;
                     } else {
-                        throw new Error("Invalid response format from AI.");
+                        throw new Error("Invalid format from AI.");
                     }
-
                 } catch (err) {
-                    console.error("Error generating email:", err);
-                    setError("Failed to generate: " + err.message + ". Please verify your Gemini API key in settings.");
-                } finally {
-                    setIsGenerating(false);
+                    console.error(err);
+                    setProfessors(prev => prev.map(p => 
+                        p.id === profId ? { ...p, status: 'error', error: err.message } : p
+                    ));
+                    return false;
                 }
             };
 
-            const sendEmailDirectly = async () => {
-                if (!accessToken) return;
-                setIsSending(true);
-                setError(null);
+            const sendSingleEmail = async (profId) => {
+                const prof = professors.find(p => p.id === profId);
+                if (!prof || !prof.subject || !prof.body) return;
+
+                if (!accessToken) {
+                    // Fallback to mailto if not connected
+                    const mailtoLink = `mailto:${prof.profEmail}?subject=${encodeURIComponent(prof.subject)}&body=${encodeURIComponent(prof.body)}`;
+                    window.open(mailtoLink, '_blank');
+                    return;
+                }
+
+                updateProfessorItem(profId, 'status', 'sending');
+                updateProfessorItem(profId, 'error', null);
 
                 try {
                     const emailContent = 
-                        `To: ${formData.profEmail}\r\n` +
-                        `Subject: ${generatedEmail.subject}\r\n` +
+                        `To: ${prof.profEmail}\r\n` +
+                        `Subject: ${prof.subject}\r\n` +
                         `Content-Type: text/plain; charset="UTF-8"\r\n\r\n` +
-                        `${generatedEmail.body}`;
+                        `${prof.body}`;
 
                     const encodedEmail = btoa(unescape(encodeURIComponent(emailContent)))
                         .replace(/\+/g, '-')
@@ -258,68 +311,69 @@
 
                     if (!response.ok) {
                         const errData = await response.json();
-                        throw new Error(errData.error?.message || 'Failed to send email');
+                        throw new Error(errData.error?.message || 'Send failed');
                     }
 
-                    showNotification('Email sent successfully via Gmail API!');
+                    updateProfessorItem(profId, 'status', 'sent');
                 } catch (err) {
-                    console.error("Sending error:", err);
-                    setError("Failed to send email: " + err.message);
-                } finally {
-                    setIsSending(false);
+                    console.error(err);
+                    setProfessors(prev => prev.map(p => 
+                        p.id === profId ? { ...p, status: 'drafted', error: 'Failed to send: ' + err.message } : p
+                    ));
                 }
             };
 
-            const handleSendEmail = () => {
-                if (!formData.profEmail) {
-                    setError("Please provide the Professor's Email address to send.");
-                    return;
-                }
-                if (!generatedEmail.subject || !generatedEmail.body) {
-                    setError("Please generate the email first.");
-                    return;
-                }
-
-                if (accessToken) {
-                    sendEmailDirectly();
-                } else {
-                    const mailtoLink = `mailto:${formData.profEmail}?subject=${encodeURIComponent(generatedEmail.subject)}&body=${encodeURIComponent(generatedEmail.body)}`;
-                    window.location.href = mailtoLink;
+            // Bulk Actions
+            const generateAllDrafts = async () => {
+                const pending = professors.filter(p => p.status === 'pending' || p.status === 'error');
+                if (pending.length === 0) return showNotification("No pending professors to generate drafts for.", "info");
+                
+                showNotification(`Starting generation for ${pending.length} drafts...`, "info");
+                
+                for (let i = 0; i < pending.length; i++) {
+                    await generateSingleDraft(pending[i].id);
+                    // 1.5 second delay between generations to respect Gemini API rate limits
+                    if (i < pending.length - 1) await new Promise(r => setTimeout(r, 1500)); 
                 }
             };
 
-            const copyToClipboard = () => {
-                const textToCopy = `Subject: ${generatedEmail.subject}\n\n${generatedEmail.body}`;
-                const textArea = document.createElement("textarea");
-                textArea.value = textToCopy;
-                document.body.appendChild(textArea);
-                textArea.select();
-                try {
-                    document.execCommand('copy');
-                    showNotification("Email copied to clipboard!");
-                } catch (err) {
-                    console.error('Failed to copy', err);
-                    setError("Failed to copy to clipboard.");
+            const sendAllDrafts = async () => {
+                if (!accessToken) {
+                    return showNotification("You must Connect Gmail first to bulk send emails.", "error");
                 }
-                document.body.removeChild(textArea);
+                
+                const drafted = professors.filter(p => p.status === 'drafted');
+                if (drafted.length === 0) return showNotification("No ready drafts to send.", "info");
+
+                if (!window.confirm(`Are you sure you want to send ${drafted.length} emails right now?`)) return;
+
+                showNotification(`Sending ${drafted.length} emails...`, "info");
+
+                for (let i = 0; i < drafted.length; i++) {
+                    await sendSingleEmail(drafted[i].id);
+                    // Delay between emails to respect Gmail limits
+                    if (i < drafted.length - 1) await new Promise(r => setTimeout(r, 1000));
+                }
+                
+                showNotification("Bulk sending complete!", "success");
             };
 
-            const showNotification = (message) => {
-                setNotification(message);
+            const showNotification = (message, type = 'info') => {
+                setNotification({ message, type });
                 setTimeout(() => setNotification(null), 4000);
             };
 
             return (
                 <div className="min-h-screen bg-gray-100 p-4 md:p-8">
                     {/* Header */}
-                    <div className="max-w-6xl mx-auto mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="max-w-7xl mx-auto mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div className="flex items-center gap-4">
                             <div className="w-12 h-12 kaist-blue rounded-lg flex items-center justify-center text-white text-2xl font-bold shadow-lg">
                                 K
                             </div>
                             <div>
-                                <h1 className="text-3xl font-bold kaist-text">KAIST Cold Email Generator</h1>
-                                <p className="text-gray-600 text-sm mt-1">Generate and send professional emails for Master's research.</p>
+                                <h1 className="text-3xl font-bold kaist-text">KAIST Mail Merge</h1>
+                                <p className="text-gray-600 text-sm mt-1">Automated Cold Outreach for Research Opportunities</p>
                             </div>
                         </div>
                         
@@ -328,14 +382,14 @@
                                 onClick={() => setShowSettings(!showSettings)} 
                                 className="bg-white px-4 py-2 rounded-lg shadow-sm border border-gray-200 text-gray-700 hover:text-blue-600 transition text-sm font-medium"
                             >
-                                <i className="fas fa-cog"></i> Settings
+                                <i className="fas fa-cog"></i> API Settings
                             </button>
                             
                             <div className="bg-white px-4 py-2 rounded-lg shadow-sm border border-gray-200 flex items-center gap-3">
                                 {accessToken ? (
                                     <>
                                         <div className="flex items-center gap-2 text-green-600 text-sm font-medium">
-                                            <i className="fas fa-check-circle"></i> Connected
+                                            <i className="fas fa-check-circle"></i> Gmail Connected
                                         </div>
                                         <button onClick={handleGmailLogout} className="text-xs text-gray-500 hover:text-red-500 transition border-l pl-3 ml-1">
                                             Disconnect
@@ -352,49 +406,39 @@
 
                     {/* Security Settings Panel */}
                     {showSettings && (
-                        <div className="max-w-6xl mx-auto mb-8 bg-blue-50 border border-blue-200 rounded-xl p-6 shadow-sm">
+                        <div className="max-w-7xl mx-auto mb-8 bg-blue-50 border border-blue-200 rounded-xl p-6 shadow-sm">
                             <div className="flex justify-between items-start mb-4">
                                 <div>
                                     <h3 className="text-lg font-bold text-blue-900"><i className="fas fa-shield-alt mr-2"></i> Security & API Configuration</h3>
-                                    <p className="text-sm text-blue-700 mt-1">
-                                        For security on GitHub Pages, keys are saved in your browser's local storage and are <strong>never</strong> saved to your code repository.
-                                    </p>
+                                    <p className="text-sm text-blue-700 mt-1">Keys are saved securely in your browser's local storage.</p>
                                 </div>
                                 <button onClick={() => setShowSettings(false)} className="text-blue-400 hover:text-blue-800">
                                     <i className="fas fa-times"></i>
                                 </button>
                             </div>
                             
-                            <div className="bg-white p-4 rounded-lg border border-blue-100 mb-4">
-                                <label className="block text-sm font-semibold text-gray-700 mb-2">Gemini API Key (For generating drafts)</label>
-                                <div className="flex gap-2">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="bg-white p-4 rounded-lg border border-blue-100">
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Gemini API Key (Draft Generation)</label>
                                     <input 
                                         type="password" 
                                         value={tempGeminiKey} 
                                         onChange={(e) => setTempGeminiKey(e.target.value)} 
                                         placeholder="AIzaSy..." 
-                                        className="flex-grow px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
+                                        className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none text-sm"
                                     />
                                 </div>
-                                <p className="text-xs text-gray-500 mt-2">
-                                    Get this from <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-blue-600 underline">Google AI Studio</a>.
-                                </p>
-                            </div>
 
-                            <div className="bg-white p-4 rounded-lg border border-blue-100">
-                                <label className="block text-sm font-semibold text-gray-700 mb-2">Google OAuth Client ID (For sending emails via Gmail)</label>
-                                <div className="flex gap-2">
+                                <div className="bg-white p-4 rounded-lg border border-blue-100">
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Google Client ID (Automated Sending)</label>
                                     <input 
                                         type="text" 
                                         value={tempClientId} 
                                         onChange={(e) => setTempClientId(e.target.value)} 
-                                        placeholder="e.g., 123456789-abc.apps.googleusercontent.com" 
-                                        className="flex-grow px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
+                                        placeholder="...apps.googleusercontent.com" 
+                                        className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none text-sm"
                                     />
                                 </div>
-                                <p className="text-xs text-gray-500 mt-2">
-                                    Create this in the Google Cloud Console. Make sure to add your GitHub Pages URL to the "Authorized JavaScript origins".
-                                </p>
                             </div>
 
                             <div className="mt-4 flex justify-end">
@@ -407,143 +451,183 @@
 
                     {/* Notification Toast */}
                     {notification && (
-                        <div className="fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-md shadow-lg z-50 flex items-center gap-2 animate-fade-in-down">
-                            <i className="fas fa-check-circle"></i> {notification}
+                        <div className={`fixed top-4 right-4 text-white px-6 py-3 rounded-md shadow-lg z-50 flex items-center gap-2 animate-fade-in-down ${notification.type === 'error' ? 'bg-red-500' : notification.type === 'success' ? 'bg-green-500' : 'bg-blue-500'}`}>
+                            <i className={`fas ${notification.type === 'error' ? 'fa-exclamation-circle' : notification.type === 'success' ? 'fa-check-circle' : 'fa-info-circle'}`}></i> 
+                            {notification.message}
                         </div>
                     )}
 
-                    <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-8">
-                        {/* Left Column: Form */}
-                        <div className="bg-white rounded-xl shadow-md p-6 border border-gray-200">
-                            <h2 className="text-xl font-semibold mb-4 border-b pb-2">Information <i className="fas fa-info-circle text-gray-400 text-sm ml-1"></i></h2>
+                    <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
+                        
+                        {/* LEFT COLUMN: Data Entry */}
+                        <div className="lg:col-span-4 space-y-6">
                             
-                            <form onSubmit={generateEmail} className="space-y-4">
-                                <div>
-                                    <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-3">Professor Details</h3>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">Professor Name *</label>
-                                            <input required type="text" name="profName" value={formData.profName} onChange={handleInputChange} placeholder="e.g., Dr. Jong Chul Ye" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition" />
-                                        </div>
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">Email Address *</label>
-                                            <input required type="email" name="profEmail" value={formData.profEmail} onChange={handleInputChange} placeholder="professor@kaist.ac.kr" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition" />
-                                        </div>
+                            {/* Persistent Profile */}
+                            <div className="bg-white rounded-xl shadow-md p-6 border border-gray-200">
+                                <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                                    <i className="fas fa-user-circle text-blue-600"></i> My Profile
+                                </h2>
+                                <p className="text-xs text-gray-500 mb-4 border-b pb-2">This is saved automatically to your browser.</p>
+                                
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Your Name</label>
+                                        <input type="text" name="yourName" value={userProfile.yourName} onChange={handleProfileChange} placeholder="e.g., Jane Doe" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none transition text-sm" />
                                     </div>
-                                    <div className="mt-4">
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Research Area / Lab Name *</label>
-                                        <input required type="text" name="researchArea" value={formData.researchArea} onChange={handleInputChange} placeholder="e.g., Bio-Imaging Lab / Computer Vision" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition" />
-                                    </div>
-                                </div>
-
-                                <div className="pt-4 mt-4 border-t border-gray-100">
-                                    <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-3">Your Details</h3>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">Your Name *</label>
-                                            <input required type="text" name="yourName" value={formData.yourName} onChange={handleInputChange} placeholder="e.g., Jane Doe" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition" />
-                                        </div>
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">Current Background *</label>
-                                            <input required type="text" name="yourBackground" value={formData.yourBackground} onChange={handleInputChange} placeholder="e.g., B.S. in Computer Science at XYZ Univ" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition" />
-                                        </div>
-                                    </div>
-                                    <div className="mt-4">
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Why this Professor? (Optional but recommended)</label>
-                                        <textarea name="specificInterest" value={formData.specificInterest} onChange={handleInputChange} rows="3" placeholder="e.g., I read your recent paper on Diffusion Models and found it fascinating because..." className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition resize-none"></textarea>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Your Background</label>
+                                        <textarea name="yourBackground" value={userProfile.yourBackground} onChange={handleProfileChange} placeholder="e.g., B.S. in Computer Science at XYZ Univ with a 3.9 GPA..." className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none transition text-sm h-24 resize-none"></textarea>
                                     </div>
                                 </div>
-
-                                {error && (
-                                    <div className="bg-red-50 text-red-700 p-3 rounded-md text-sm flex items-start gap-2">
-                                        <i className="fas fa-exclamation-triangle mt-0.5"></i> {error}
-                                    </div>
-                                )}
-
-                                <button 
-                                    type="submit" 
-                                    disabled={isGenerating}
-                                    className={`w-full py-3 px-4 rounded-md text-white font-medium flex items-center justify-center gap-2 transition ${isGenerating ? 'bg-blue-400 cursor-not-allowed' : 'kaist-blue hover:bg-blue-800 shadow-md hover:shadow-lg'}`}
-                                >
-                                    {isGenerating ? (
-                                        <><div className="loader border-white border-t-transparent"></div> Generating Draft...</>
-                                    ) : (
-                                        <><i className="fas fa-magic"></i> Generate Email Draft</>
-                                    )}
-                                </button>
-                            </form>
-                        </div>
-
-                        {/* Right Column: Preview & Edit */}
-                        <div className="bg-white rounded-xl shadow-md p-6 border border-gray-200 flex flex-col h-full">
-                            <div className="flex justify-between items-center mb-4 border-b pb-2">
-                                <h2 className="text-xl font-semibold">Email Preview <i className="fas fa-envelope-open-text text-gray-400 text-sm ml-1"></i></h2>
-                                {generatedEmail.body && (
-                                    <button onClick={copyToClipboard} className="text-gray-500 hover:text-blue-600 transition text-sm flex items-center gap-1">
-                                        <i className="far fa-copy"></i> Copy
-                                    </button>
-                                )}
                             </div>
 
-                            {!generatedEmail.body && !isGenerating && (
-                                <div className="flex-grow flex flex-col items-center justify-center text-gray-400 border-2 border-dashed border-gray-200 rounded-lg p-8 text-center bg-gray-50">
-                                    <i className="fas fa-paper-plane text-4xl mb-3 text-gray-300"></i>
-                                    <p>Fill out the form and click "Generate" to create a tailored email draft.</p>
-                                </div>
-                            )}
-
-                            {isGenerating && (
-                                <div className="flex-grow flex flex-col items-center justify-center text-gray-500 rounded-lg p-8 text-center">
-                                    <div className="loader mb-4 border-blue-500 border-t-transparent w-10 h-10 border-4"></div>
-                                    <p className="animate-pulse">Crafting the perfect professional academic email...</p>
-                                </div>
-                            )}
-
-                            {generatedEmail.body && !isGenerating && (
-                                <div className="flex-grow flex flex-col space-y-4">
+                            {/* Add Professor Form */}
+                            <div className="bg-white rounded-xl shadow-md p-6 border border-gray-200">
+                                <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                                    <i className="fas fa-user-plus text-blue-600"></i> Add Professor
+                                </h2>
+                                
+                                <form onSubmit={handleAddProfessor} className="space-y-4">
                                     <div>
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Subject Line</label>
-                                        <input 
-                                            type="text" 
-                                            name="subject"
-                                            value={generatedEmail.subject} 
-                                            onChange={handleEmailChange}
-                                            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-md font-medium text-gray-800 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition" 
-                                        />
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Professor Name *</label>
+                                        <input required type="text" name="profName" value={profForm.profName} onChange={handleProfFormChange} placeholder="e.g., Dr. Jong Chul Ye" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
                                     </div>
-                                    <div className="flex-grow flex flex-col">
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Email Body</label>
-                                        <textarea 
-                                            name="body"
-                                            value={generatedEmail.body} 
-                                            onChange={handleEmailChange}
-                                            className="w-full flex-grow min-h-[300px] p-4 bg-gray-50 border border-gray-200 rounded-md text-gray-700 leading-relaxed focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition resize-none"
-                                        ></textarea>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Email Address *</label>
+                                        <input required type="email" name="profEmail" value={profForm.profEmail} onChange={handleProfFormChange} placeholder="professor@kaist.ac.kr" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Research Area</label>
+                                        <input type="text" name="researchArea" value={profForm.researchArea} onChange={handleProfFormChange} placeholder="e.g., AI / Bio-Imaging" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Why this Professor? (Optional)</label>
+                                        <textarea name="specificInterest" value={profForm.specificInterest} onChange={handleProfFormChange} placeholder="e.g., I read your paper on..." className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none text-sm h-20 resize-none"></textarea>
                                     </div>
                                     
-                                    <div className="pt-4 border-t border-gray-100 flex gap-3">
+                                    <button type="submit" className="w-full py-2.5 px-4 rounded-md text-white font-medium bg-gray-800 hover:bg-black transition text-sm flex items-center justify-center gap-2">
+                                        <i className="fas fa-plus"></i> Add to Queue
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+
+                        {/* RIGHT COLUMN: Professor Queue */}
+                        <div className="lg:col-span-8 flex flex-col h-[calc(100vh-12rem)] min-h-[600px]">
+                            <div className="bg-white rounded-xl shadow-md border border-gray-200 flex flex-col h-full overflow-hidden">
+                                
+                                {/* Queue Header & Bulk Actions */}
+                                <div className="p-5 border-b border-gray-200 bg-gray-50 flex flex-col sm:flex-row justify-between items-center gap-4">
+                                    <div>
+                                        <h2 className="text-xl font-semibold text-gray-800">Mailing List ({professors.length})</h2>
+                                        <p className="text-xs text-gray-500">Review, edit, and send your emails.</p>
+                                    </div>
+                                    <div className="flex gap-2">
                                         <button 
-                                            onClick={handleSendEmail}
-                                            disabled={isSending}
-                                            className={`flex-grow py-3 px-4 rounded-md font-medium shadow-md transition flex items-center justify-center gap-2 ${accessToken ? 'bg-red-600 hover:bg-red-700 text-white' : 'kaist-blue hover:bg-blue-800 text-white'} ${isSending ? 'opacity-70 cursor-not-allowed' : 'hover:shadow-lg'}`}
+                                            onClick={generateAllDrafts}
+                                            className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-md hover:bg-gray-100 transition text-sm font-medium shadow-sm flex items-center gap-2"
                                         >
-                                            {isSending ? (
-                                                <><div className="loader border-white border-t-transparent w-4 h-4 border-2"></div> Sending...</>
-                                            ) : accessToken ? (
-                                                <><i className="fab fa-google"></i> Send Automatically via Gmail</>
-                                            ) : (
-                                                <><i className="fas fa-external-link-alt"></i> Open in Email Client</>
-                                            )}
+                                            <i className="fas fa-magic text-blue-500"></i> Generate All Drafts
+                                        </button>
+                                        <button 
+                                            onClick={sendAllDrafts}
+                                            className={`px-4 py-2 rounded-md text-white transition text-sm font-medium shadow-sm flex items-center gap-2 ${accessToken ? 'bg-red-600 hover:bg-red-700' : 'bg-gray-400 cursor-not-allowed'}`}
+                                            title={!accessToken ? "Connect Gmail to enable bulk sending" : ""}
+                                        >
+                                            <i className="fas fa-paper-plane"></i> Send All Ready
                                         </button>
                                     </div>
-                                    <p className="text-xs text-gray-400 text-center mt-2">
-                                        {accessToken 
-                                            ? "This email will be sent automatically in the background from your connected Gmail account."
-                                            : "Clicking this will safely open your default email app (like Gmail or Outlook) with these details pre-filled."}
-                                    </p>
                                 </div>
-                            )}
+
+                                {/* Scrollable List */}
+                                <div className="flex-grow overflow-y-auto p-5 space-y-4 custom-scrollbar bg-gray-100/50">
+                                    {professors.length === 0 ? (
+                                        <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                                            <i className="fas fa-inbox text-5xl mb-4 text-gray-300"></i>
+                                            <p className="text-lg font-medium text-gray-500">Queue is empty</p>
+                                            <p className="text-sm">Add professors using the form on the left.</p>
+                                        </div>
+                                    ) : (
+                                        professors.map((prof) => (
+                                            <div key={prof.id} className={`bg-white border rounded-lg overflow-hidden shadow-sm transition-all ${prof.status === 'sent' ? 'border-green-300' : 'border-gray-200'}`}>
+                                                
+                                                {/* Card Header Summary */}
+                                                <div className="p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+                                                    <div>
+                                                        <h3 className="font-bold text-gray-800 text-lg">{prof.profName}</h3>
+                                                        <p className="text-sm text-gray-500 flex items-center gap-2">
+                                                            <i className="far fa-envelope"></i> {prof.profEmail}
+                                                            {prof.researchArea && <span className="text-xs bg-gray-100 px-2 py-0.5 rounded-full ml-2 border border-gray-200">{prof.researchArea}</span>}
+                                                        </p>
+                                                    </div>
+                                                    
+                                                    <div className="flex items-center gap-3">
+                                                        {/* Status Badge */}
+                                                        {prof.status === 'pending' && <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-gray-100 text-gray-600 border border-gray-200">Pending Draft</span>}
+                                                        {prof.status === 'generating' && <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-blue-50 text-blue-600 border border-blue-200 flex items-center gap-1"><div className="loader border-blue-600 border-t-transparent !w-3 !h-3 !border-2"></div> Generating</span>}
+                                                        {prof.status === 'drafted' && <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-yellow-50 text-yellow-700 border border-yellow-200">Draft Ready</span>}
+                                                        {prof.status === 'sending' && <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-orange-50 text-orange-600 border border-orange-200 flex items-center gap-1"><div className="loader border-orange-600 border-t-transparent !w-3 !h-3 !border-2"></div> Sending</span>}
+                                                        {prof.status === 'sent' && <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-green-50 text-green-700 border border-green-200"><i className="fas fa-check"></i> Sent</span>}
+                                                        {prof.status === 'error' && <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-red-50 text-red-600 border border-red-200" title={prof.error}>Error</span>}
+                                                        
+                                                        {/* Actions */}
+                                                        <div className="flex bg-gray-50 rounded-lg border border-gray-200 p-1">
+                                                            {(prof.status === 'pending' || prof.status === 'error' || prof.status === 'drafted') && (
+                                                                <button onClick={() => generateSingleDraft(prof.id)} className="p-1.5 text-gray-500 hover:text-blue-600 rounded transition" title="Generate/Regenerate Draft">
+                                                                    <i className="fas fa-magic"></i>
+                                                                </button>
+                                                            )}
+                                                            {prof.status === 'drafted' && (
+                                                                <button onClick={() => sendSingleEmail(prof.id)} className="p-1.5 text-gray-500 hover:text-red-600 rounded transition" title="Send Email">
+                                                                    <i className="fas fa-paper-plane"></i>
+                                                                </button>
+                                                            )}
+                                                            <div className="w-px bg-gray-300 mx-1"></div>
+                                                            <button onClick={() => removeProfessor(prof.id)} className="p-1.5 text-gray-400 hover:text-gray-800 rounded transition" title="Remove from list">
+                                                                <i className="fas fa-trash-alt"></i>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {/* Error Message */}
+                                                {prof.error && (
+                                                    <div className="px-4 py-2 bg-red-50 text-red-600 text-xs border-t border-red-100 flex items-center gap-2">
+                                                        <i className="fas fa-exclamation-triangle"></i> {prof.error}
+                                                    </div>
+                                                )}
+
+                                                {/* Draft Editor (Only show if draft exists) */}
+                                                {(prof.subject || prof.body) && (
+                                                    <div className="border-t border-gray-100 bg-gray-50 p-4 space-y-3">
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Subject</label>
+                                                            <input 
+                                                                type="text" 
+                                                                value={prof.subject} 
+                                                                onChange={(e) => updateProfessorItem(prof.id, 'subject', e.target.value)}
+                                                                disabled={prof.status === 'sending' || prof.status === 'sent'}
+                                                                className="w-full px-3 py-2 bg-white border border-gray-200 rounded-md font-medium text-gray-800 outline-none focus:border-blue-400 transition text-sm disabled:bg-gray-100" 
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Message Body</label>
+                                                            <textarea 
+                                                                value={prof.body} 
+                                                                onChange={(e) => updateProfessorItem(prof.id, 'body', e.target.value)}
+                                                                disabled={prof.status === 'sending' || prof.status === 'sent'}
+                                                                className="w-full p-3 bg-white border border-gray-200 rounded-md text-gray-700 leading-relaxed outline-none focus:border-blue-400 transition text-sm resize-none min-h-[150px] disabled:bg-gray-100"
+                                                            ></textarea>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
                         </div>
+
                     </div>
                 </div>
             );
