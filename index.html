@@ -47,11 +47,13 @@
 
         const App = () => {
             // SECURITY UPDATE: 
-            // We no longer hardcode the Client ID in the source code.
-            // This allows you to safely host this on GitHub Pages publicly.
+            // We no longer hardcode ANY keys in the source code.
             const [googleClientId, setGoogleClientId] = useState(localStorage.getItem('kaist_google_client_id') || '');
+            const [geminiApiKey, setGeminiApiKey] = useState(localStorage.getItem('kaist_gemini_api_key') || '');
             const [showSettings, setShowSettings] = useState(false);
+            
             const [tempClientId, setTempClientId] = useState(googleClientId);
+            const [tempGeminiKey, setTempGeminiKey] = useState(geminiApiKey);
 
             // Form State
             const [formData, setFormData] = useState({
@@ -106,12 +108,17 @@
 
             const saveSettings = () => {
                 localStorage.setItem('kaist_google_client_id', tempClientId.trim());
+                localStorage.setItem('kaist_gemini_api_key', tempGeminiKey.trim());
+                
                 setGoogleClientId(tempClientId.trim());
+                setGeminiApiKey(tempGeminiKey.trim());
                 setShowSettings(false);
                 showNotification('Security settings saved locally.');
                 
-                // Force reload of GSI client if it was connected
-                if (accessToken) handleGmailLogout();
+                // Force reload of GSI client if it was connected and Client ID changed
+                if (accessToken && tempClientId.trim() !== googleClientId) {
+                    handleGmailLogout();
+                }
             };
 
             const handleGmailLogin = () => {
@@ -148,6 +155,13 @@
 
             const generateEmail = async (e) => {
                 e.preventDefault();
+                
+                if (!geminiApiKey) {
+                    setError("Please configure your Gemini API Key in Settings to generate emails.");
+                    setShowSettings(true);
+                    return;
+                }
+
                 setIsGenerating(true);
                 setError(null);
 
@@ -182,8 +196,7 @@
                         }
                     };
 
-                    const apiKey = ""; // API key managed by Canvas environment
-                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
                     
                     const response = await fetch(apiUrl, {
                         method: 'POST',
@@ -192,6 +205,10 @@
                     });
 
                     const result = await response.json();
+                    
+                    if (!response.ok) {
+                        throw new Error(result.error?.message || "Failed to call Gemini API");
+                    }
                     
                     if (result.candidates && result.candidates.length > 0) {
                         const jsonText = result.candidates[0].content.parts[0].text;
@@ -207,7 +224,7 @@
 
                 } catch (err) {
                     console.error("Error generating email:", err);
-                    setError("Failed to generate the email. Note: When deploying this outside of this editor, you will need to configure your own Gemini API Key proxy.");
+                    setError("Failed to generate: " + err.message + ". Please verify your Gemini API key in settings.");
                 } finally {
                     setIsGenerating(false);
                 }
@@ -348,8 +365,24 @@
                                 </button>
                             </div>
                             
+                            <div className="bg-white p-4 rounded-lg border border-blue-100 mb-4">
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">Gemini API Key (For generating drafts)</label>
+                                <div className="flex gap-2">
+                                    <input 
+                                        type="password" 
+                                        value={tempGeminiKey} 
+                                        onChange={(e) => setTempGeminiKey(e.target.value)} 
+                                        placeholder="AIzaSy..." 
+                                        className="flex-grow px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
+                                    />
+                                </div>
+                                <p className="text-xs text-gray-500 mt-2">
+                                    Get this from <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-blue-600 underline">Google AI Studio</a>.
+                                </p>
+                            </div>
+
                             <div className="bg-white p-4 rounded-lg border border-blue-100">
-                                <label className="block text-sm font-semibold text-gray-700 mb-2">Google OAuth Client ID (For sending emails)</label>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">Google OAuth Client ID (For sending emails via Gmail)</label>
                                 <div className="flex gap-2">
                                     <input 
                                         type="text" 
@@ -358,13 +391,16 @@
                                         placeholder="e.g., 123456789-abc.apps.googleusercontent.com" 
                                         className="flex-grow px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
                                     />
-                                    <button onClick={saveSettings} className="kaist-blue text-white px-4 py-2 rounded-md hover:bg-blue-800 transition text-sm font-medium">
-                                        Save
-                                    </button>
                                 </div>
                                 <p className="text-xs text-gray-500 mt-2">
                                     Create this in the Google Cloud Console. Make sure to add your GitHub Pages URL to the "Authorized JavaScript origins".
                                 </p>
+                            </div>
+
+                            <div className="mt-4 flex justify-end">
+                                <button onClick={saveSettings} className="kaist-blue text-white px-6 py-2 rounded-md hover:bg-blue-800 transition font-medium">
+                                    Save Configurations
+                                </button>
                             </div>
                         </div>
                     )}
