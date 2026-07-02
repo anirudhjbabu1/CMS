@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KAIST Master's Research Email Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            color: #1f2937;
+        }
+        .kaist-blue {
+            background-color: #004098;
+        }
+        .kaist-text {
+            color: #004098;
+        }
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 3px solid #004098;
+            width: 24px;
+            height: 24px;
+            -webkit-animation: spin 1s linear infinite;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const App = () => {
+            // SECURITY UPDATE: 
+            // We no longer hardcode the Client ID in the source code.
+            // This allows you to safely host this on GitHub Pages publicly.
+            const [googleClientId, setGoogleClientId] = useState(localStorage.getItem('kaist_google_client_id') || '');
+            const [showSettings, setShowSettings] = useState(false);
+            const [tempClientId, setTempClientId] = useState(googleClientId);
+
+            // Form State
+            const [formData, setFormData] = useState({
+                profName: '',
+                profEmail: '',
+                researchArea: '',
+                specificInterest: '',
+                yourName: '',
+                yourBackground: '',
+            });
+
+            // Generated Email State
+            const [generatedEmail, setGeneratedEmail] = useState({
+                subject: '',
+                body: ''
+            });
+
+            const [isGenerating, setIsGenerating] = useState(false);
+            const [error, setError] = useState(null);
+            const [notification, setNotification] = useState(null);
+            
+            // Gmail Auth State
+            const [accessToken, setAccessToken] = useState(null);
+            const [tokenClient, setTokenClient] = useState(null);
+            const [isSending, setIsSending] = useState(false);
+
+            // Initialize Google Identity Services only when a valid Client ID is provided
+            useEffect(() => {
+                if (!googleClientId) return;
+
+                const initGSI = () => {
+                    if (window.google && window.google.accounts) {
+                        const client = window.google.accounts.oauth2.initTokenClient({
+                            client_id: googleClientId,
+                            scope: 'https://www.googleapis.com/auth/gmail.send',
+                            callback: (response) => {
+                                if (response.error) {
+                                    setError('Failed to authenticate with Google: ' + response.error);
+                                    return;
+                                }
+                                setAccessToken(response.access_token);
+                                showNotification('Successfully connected to Gmail!');
+                            },
+                        });
+                        setTokenClient(client);
+                    } else {
+                        setTimeout(initGSI, 500);
+                    }
+                };
+                initGSI();
+            }, [googleClientId]);
+
+            const saveSettings = () => {
+                localStorage.setItem('kaist_google_client_id', tempClientId.trim());
+                setGoogleClientId(tempClientId.trim());
+                setShowSettings(false);
+                showNotification('Security settings saved locally.');
+                
+                // Force reload of GSI client if it was connected
+                if (accessToken) handleGmailLogout();
+            };
+
+            const handleGmailLogin = () => {
+                if (!googleClientId) {
+                    setShowSettings(true);
+                    setError("Please configure your Google Client ID first.");
+                    return;
+                }
+                if (tokenClient) {
+                    tokenClient.requestAccessToken({ prompt: 'consent' });
+                }
+            };
+
+            const handleGmailLogout = () => {
+                if (accessToken && window.google) {
+                    window.google.accounts.oauth2.revoke(accessToken, () => {
+                        setAccessToken(null);
+                        showNotification('Disconnected from Gmail.');
+                    });
+                } else {
+                    setAccessToken(null);
+                }
+            };
+
+            const handleInputChange = (e) => {
+                const { name, value } = e.target;
+                setFormData(prev => ({ ...prev, [name]: value }));
+            };
+
+            const handleEmailChange = (e) => {
+                const { name, value } = e.target;
+                setGeneratedEmail(prev => ({ ...prev, [name]: value }));
+            };
+
+            const generateEmail = async (e) => {
+                e.preventDefault();
+                setIsGenerating(true);
+                setError(null);
+
+                const prompt = `
+                    You are an expert academic career advisor. Please write a highly professional, polite, and persuasive cold email for a prospective Master's student reaching out to a professor at KAIST (Korea Advanced Institute of Science and Technology) for research opportunities.
+                    
+                    Here are the details to include and contextualize:
+                    - Professor's Name: ${formData.profName}
+                    - Professor's Research Area / Lab: ${formData.researchArea}
+                    - Student's Name: ${formData.yourName}
+                    - Student's Background: ${formData.yourBackground}
+                    - Student's Specific Interest in the Professor's work: ${formData.specificInterest || 'I am highly interested in your recent publications and the innovative work being done in your lab.'}
+
+                    The tone should be formal, enthusiastic, and concise. Do not use placeholders like [Insert Date] unless absolutely necessary. Write it ready to send. Keep it to 3-4 short paragraphs, standard for academic cold emails.
+
+                    Return the response as a JSON object with two fields: "subject" and "body".
+                `;
+
+                try {
+                    const payload = {
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: {
+                            responseMimeType: "application/json",
+                            responseSchema: {
+                                type: "OBJECT",
+                                properties: {
+                                    subject: { type: "STRING" },
+                                    body: { type: "STRING" }
+                                },
+                                required: ["subject", "body"]
+                            }
+                        }
+                    };
+
+                    const apiKey = ""; // API key managed by Canvas environment
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                    
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.candidates && result.candidates.length > 0) {
+                        const jsonText = result.candidates[0].content.parts[0].text;
+                        const parsedEmail = JSON.parse(jsonText);
+                        setGeneratedEmail({
+                            subject: parsedEmail.subject,
+                            body: parsedEmail.body
+                        });
+                        showNotification("Email generated successfully! You can now review and edit it.");
+                    } else {
+                        throw new Error("Invalid response format from AI.");
+                    }
+
+                } catch (err) {
+                    console.error("Error generating email:", err);
+                    setError("Failed to generate the email. Note: When deploying this outside of this editor, you will need to configure your own Gemini API Key proxy.");
+                } finally {
+                    setIsGenerating(false);
+                }
+            };
+
+            const sendEmailDirectly = async () => {
+                if (!accessToken) return;
+                setIsSending(true);
+                setError(null);
+
+                try {
+                    const emailContent = 
+                        `To: ${formData.profEmail}\r\n` +
+                        `Subject: ${generatedEmail.subject}\r\n` +
+                        `Content-Type: text/plain; charset="UTF-8"\r\n\r\n` +
+                        `${generatedEmail.body}`;
+
+                    const encodedEmail = btoa(unescape(encodeURIComponent(emailContent)))
+                        .replace(/\+/g, '-')
+                        .replace(/\//g, '_')
+                        .replace(/=+$/, '');
+
+                    const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ raw: encodedEmail })
+                    });
+
+                    if (!response.ok) {
+                        const errData = await response.json();
+                        throw new Error(errData.error?.message || 'Failed to send email');
+                    }
+
+                    showNotification('Email sent successfully via Gmail API!');
+                } catch (err) {
+                    console.error("Sending error:", err);
+                    setError("Failed to send email: " + err.message);
+                } finally {
+                    setIsSending(false);
+                }
+            };
+
+            const handleSendEmail = () => {
+                if (!formData.profEmail) {
+                    setError("Please provide the Professor's Email address to send.");
+                    return;
+                }
+                if (!generatedEmail.subject || !generatedEmail.body) {
+                    setError("Please generate the email first.");
+                    return;
+                }
+
+                if (accessToken) {
+                    sendEmailDirectly();
+                } else {
+                    const mailtoLink = `mailto:${formData.profEmail}?subject=${encodeURIComponent(generatedEmail.subject)}&body=${encodeURIComponent(generatedEmail.body)}`;
+                    window.location.href = mailtoLink;
+                }
+            };
+
+            const copyToClipboard = () => {
+                const textToCopy = `Subject: ${generatedEmail.subject}\n\n${generatedEmail.body}`;
+                const textArea = document.createElement("textarea");
+                textArea.value = textToCopy;
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    showNotification("Email copied to clipboard!");
+                } catch (err) {
+                    console.error('Failed to copy', err);
+                    setError("Failed to copy to clipboard.");
+                }
+                document.body.removeChild(textArea);
+            };
+
+            const showNotification = (message) => {
+                setNotification(message);
+                setTimeout(() => setNotification(null), 4000);
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-100 p-4 md:p-8">
+                    {/* Header */}
+                    <div className="max-w-6xl mx-auto mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 kaist-blue rounded-lg flex items-center justify-center text-white text-2xl font-bold shadow-lg">
+                                K
+                            </div>
+                            <div>
+                                <h1 className="text-3xl font-bold kaist-text">KAIST Cold Email Generator</h1>
+                                <p className="text-gray-600 text-sm mt-1">Generate and send professional emails for Master's research.</p>
+                            </div>
+                        </div>
+                        
+                        <div className="flex gap-2">
+                            <button 
+                                onClick={() => setShowSettings(!showSettings)} 
+                                className="bg-white px-4 py-2 rounded-lg shadow-sm border border-gray-200 text-gray-700 hover:text-blue-600 transition text-sm font-medium"
+                            >
+                                <i className="fas fa-cog"></i> Settings
+                            </button>
+                            
+                            <div className="bg-white px-4 py-2 rounded-lg shadow-sm border border-gray-200 flex items-center gap-3">
+                                {accessToken ? (
+                                    <>
+                                        <div className="flex items-center gap-2 text-green-600 text-sm font-medium">
+                                            <i className="fas fa-check-circle"></i> Connected
+                                        </div>
+                                        <button onClick={handleGmailLogout} className="text-xs text-gray-500 hover:text-red-500 transition border-l pl-3 ml-1">
+                                            Disconnect
+                                        </button>
+                                    </>
+                                ) : (
+                                    <button onClick={handleGmailLogin} className="flex items-center gap-2 text-sm text-gray-700 hover:text-blue-600 transition font-medium">
+                                        <i className="fab fa-google text-red-500"></i> Connect Gmail
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Security Settings Panel */}
+                    {showSettings && (
+                        <div className="max-w-6xl mx-auto mb-8 bg-blue-50 border border-blue-200 rounded-xl p-6 shadow-sm">
+                            <div className="flex justify-between items-start mb-4">
+                                <div>
+                                    <h3 className="text-lg font-bold text-blue-900"><i className="fas fa-shield-alt mr-2"></i> Security & API Configuration</h3>
+                                    <p className="text-sm text-blue-700 mt-1">
+                                        For security on GitHub Pages, keys are saved in your browser's local storage and are <strong>never</strong> saved to your code repository.
+                                    </p>
+                                </div>
+                                <button onClick={() => setShowSettings(false)} className="text-blue-400 hover:text-blue-800">
+                                    <i className="fas fa-times"></i>
+                                </button>
+                            </div>
+                            
+                            <div className="bg-white p-4 rounded-lg border border-blue-100">
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">Google OAuth Client ID (For sending emails)</label>
+                                <div className="flex gap-2">
+                                    <input 
+                                        type="text" 
+                                        value={tempClientId} 
+                                        onChange={(e) => setTempClientId(e.target.value)} 
+                                        placeholder="e.g., 123456789-abc.apps.googleusercontent.com" 
+                                        className="flex-grow px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
+                                    />
+                                    <button onClick={saveSettings} className="kaist-blue text-white px-4 py-2 rounded-md hover:bg-blue-800 transition text-sm font-medium">
+                                        Save
+                                    </button>
+                                </div>
+                                <p className="text-xs text-gray-500 mt-2">
+                                    Create this in the Google Cloud Console. Make sure to add your GitHub Pages URL to the "Authorized JavaScript origins".
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Notification Toast */}
+                    {notification && (
+                        <div className="fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-md shadow-lg z-50 flex items-center gap-2 animate-fade-in-down">
+                            <i className="fas fa-check-circle"></i> {notification}
+                        </div>
+                    )}
+
+                    <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        {/* Left Column: Form */}
+                        <div className="bg-white rounded-xl shadow-md p-6 border border-gray-200">
+                            <h2 className="text-xl font-semibold mb-4 border-b pb-2">Information <i className="fas fa-info-circle text-gray-400 text-sm ml-1"></i></h2>
+                            
+                            <form onSubmit={generateEmail} className="space-y-4">
+                                <div>
+                                    <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-3">Professor Details</h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Professor Name *</label>
+                                            <input required type="text" name="profName" value={formData.profName} onChange={handleInputChange} placeholder="e.g., Dr. Jong Chul Ye" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Email Address *</label>
+                                            <input required type="email" name="profEmail" value={formData.profEmail} onChange={handleInputChange} placeholder="professor@kaist.ac.kr" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition" />
+                                        </div>
+                                    </div>
+                                    <div className="mt-4">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Research Area / Lab Name *</label>
+                                        <input required type="text" name="researchArea" value={formData.researchArea} onChange={handleInputChange} placeholder="e.g., Bio-Imaging Lab / Computer Vision" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition" />
+                                    </div>
+                                </div>
+
+                                <div className="pt-4 mt-4 border-t border-gray-100">
+                                    <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-3">Your Details</h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Your Name *</label>
+                                            <input required type="text" name="yourName" value={formData.yourName} onChange={handleInputChange} placeholder="e.g., Jane Doe" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Current Background *</label>
+                                            <input required type="text" name="yourBackground" value={formData.yourBackground} onChange={handleInputChange} placeholder="e.g., B.S. in Computer Science at XYZ Univ" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition" />
+                                        </div>
+                                    </div>
+                                    <div className="mt-4">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Why this Professor? (Optional but recommended)</label>
+                                        <textarea name="specificInterest" value={formData.specificInterest} onChange={handleInputChange} rows="3" placeholder="e.g., I read your recent paper on Diffusion Models and found it fascinating because..." className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition resize-none"></textarea>
+                                    </div>
+                                </div>
+
+                                {error && (
+                                    <div className="bg-red-50 text-red-700 p-3 rounded-md text-sm flex items-start gap-2">
+                                        <i className="fas fa-exclamation-triangle mt-0.5"></i> {error}
+                                    </div>
+                                )}
+
+                                <button 
+                                    type="submit" 
+                                    disabled={isGenerating}
+                                    className={`w-full py-3 px-4 rounded-md text-white font-medium flex items-center justify-center gap-2 transition ${isGenerating ? 'bg-blue-400 cursor-not-allowed' : 'kaist-blue hover:bg-blue-800 shadow-md hover:shadow-lg'}`}
+                                >
+                                    {isGenerating ? (
+                                        <><div className="loader border-white border-t-transparent"></div> Generating Draft...</>
+                                    ) : (
+                                        <><i className="fas fa-magic"></i> Generate Email Draft</>
+                                    )}
+                                </button>
+                            </form>
+                        </div>
+
+                        {/* Right Column: Preview & Edit */}
+                        <div className="bg-white rounded-xl shadow-md p-6 border border-gray-200 flex flex-col h-full">
+                            <div className="flex justify-between items-center mb-4 border-b pb-2">
+                                <h2 className="text-xl font-semibold">Email Preview <i className="fas fa-envelope-open-text text-gray-400 text-sm ml-1"></i></h2>
+                                {generatedEmail.body && (
+                                    <button onClick={copyToClipboard} className="text-gray-500 hover:text-blue-600 transition text-sm flex items-center gap-1">
+                                        <i className="far fa-copy"></i> Copy
+                                    </button>
+                                )}
+                            </div>
+
+                            {!generatedEmail.body && !isGenerating && (
+                                <div className="flex-grow flex flex-col items-center justify-center text-gray-400 border-2 border-dashed border-gray-200 rounded-lg p-8 text-center bg-gray-50">
+                                    <i className="fas fa-paper-plane text-4xl mb-3 text-gray-300"></i>
+                                    <p>Fill out the form and click "Generate" to create a tailored email draft.</p>
+                                </div>
+                            )}
+
+                            {isGenerating && (
+                                <div className="flex-grow flex flex-col items-center justify-center text-gray-500 rounded-lg p-8 text-center">
+                                    <div className="loader mb-4 border-blue-500 border-t-transparent w-10 h-10 border-4"></div>
+                                    <p className="animate-pulse">Crafting the perfect professional academic email...</p>
+                                </div>
+                            )}
+
+                            {generatedEmail.body && !isGenerating && (
+                                <div className="flex-grow flex flex-col space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Subject Line</label>
+                                        <input 
+                                            type="text" 
+                                            name="subject"
+                                            value={generatedEmail.subject} 
+                                            onChange={handleEmailChange}
+                                            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-md font-medium text-gray-800 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition" 
+                                        />
+                                    </div>
+                                    <div className="flex-grow flex flex-col">
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Email Body</label>
+                                        <textarea 
+                                            name="body"
+                                            value={generatedEmail.body} 
+                                            onChange={handleEmailChange}
+                                            className="w-full flex-grow min-h-[300px] p-4 bg-gray-50 border border-gray-200 rounded-md text-gray-700 leading-relaxed focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition resize-none"
+                                        ></textarea>
+                                    </div>
+                                    
+                                    <div className="pt-4 border-t border-gray-100 flex gap-3">
+                                        <button 
+                                            onClick={handleSendEmail}
+                                            disabled={isSending}
+                                            className={`flex-grow py-3 px-4 rounded-md font-medium shadow-md transition flex items-center justify-center gap-2 ${accessToken ? 'bg-red-600 hover:bg-red-700 text-white' : 'kaist-blue hover:bg-blue-800 text-white'} ${isSending ? 'opacity-70 cursor-not-allowed' : 'hover:shadow-lg'}`}
+                                        >
+                                            {isSending ? (
+                                                <><div className="loader border-white border-t-transparent w-4 h-4 border-2"></div> Sending...</>
+                                            ) : accessToken ? (
+                                                <><i className="fab fa-google"></i> Send Automatically via Gmail</>
+                                            ) : (
+                                                <><i className="fas fa-external-link-alt"></i> Open in Email Client</>
+                                            )}
+                                        </button>
+                                    </div>
+                                    <p className="text-xs text-gray-400 text-center mt-2">
+                                        {accessToken 
+                                            ? "This email will be sent automatically in the background from your connected Gmail account."
+                                            : "Clicking this will safely open your default email app (like Gmail or Outlook) with these details pre-filled."}
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
