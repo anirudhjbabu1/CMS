@@ -81,6 +81,7 @@
                 profName: '',
                 profEmail: '',
                 researchArea: '',
+                profIntro: '',
                 customPrompt: ''
             });
 
@@ -219,7 +220,7 @@
                 };
                 
                 setProfessors(prev => [newProf, ...prev]);
-                setProfForm({ profName: '', profEmail: '', researchArea: '', customPrompt: '' });
+                setProfForm({ profName: '', profEmail: '', researchArea: '', profIntro: '', customPrompt: '' });
                 showNotification("Professor added to the queue.", "success");
             };
 
@@ -254,7 +255,8 @@
                     
                     Details to include:
                     - Professor's Name: ${prof.profName}
-                    - Professor's Research Area / Lab: ${prof.researchArea || 'Computer Science / Engineering'}
+                    - Professor's Research Area & Keywords: ${prof.researchArea || 'Computer Science / Engineering'}
+                    - Introduction/Context for this Professor: ${prof.profIntro || 'Express genuine general interest in their recent work.'}
                     - Student's Name: ${userProfile.yourName}
                     - Student's Background: ${userProfile.yourBackground}
                 `;
@@ -606,8 +608,12 @@
                                         <input required type="email" name="profEmail" value={profForm.profEmail} onChange={handleProfFormChange} placeholder="professor@kaist.ac.kr" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Research Area</label>
-                                        <input type="text" name="researchArea" value={profForm.researchArea} onChange={handleProfFormChange} placeholder="e.g., AI / Bio-Imaging" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Research Area & Keywords</label>
+                                        <input type="text" name="researchArea" value={profForm.researchArea} onChange={handleProfFormChange} placeholder="e.g., AI, Computer Vision, Transformers" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Professor Intro / Context</label>
+                                        <textarea name="profIntro" value={profForm.profIntro} onChange={handleProfFormChange} placeholder="e.g., I recently read your 2024 paper on Diffusion Models and found it fascinating..." className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none text-sm h-20 resize-none"></textarea>
                                     </div>
                                     
                                     <button type="submit" className="w-full py-2.5 px-4 mt-2 rounded-md text-white font-medium bg-gray-800 hover:bg-black transition text-sm flex items-center justify-center gap-2">
@@ -664,6 +670,11 @@
                                                             <i className="far fa-envelope"></i> {prof.profEmail}
                                                             {prof.researchArea && <span className="text-xs bg-gray-100 px-2 py-0.5 rounded-full ml-2 border border-gray-200">{prof.researchArea}</span>}
                                                         </p>
+                                                        {prof.profIntro && (
+                                                            <div className="mt-2 text-xs text-gray-600 bg-gray-50 p-2 rounded-md border border-gray-100">
+                                                                <span className="font-semibold text-gray-700">Intro Context:</span> {prof.profIntro}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                     
                                                     <div className="flex flex-col items-end gap-2">
