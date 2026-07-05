@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title> Master's Research Email Generator</title>
+    <title>KAIST Master's Research Email Generator</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -74,7 +74,7 @@
                 return saved ? JSON.parse(saved) : { yourName: '', yourBackground: '' };
             });
             // File attachment state (not saved to local storage due to size limits)
-            const [globalAttachment, setGlobalAttachment] = useState(null); 
+            const [globalAttachments, setGlobalAttachments] = useState([]); 
 
             const [professors, setProfessors] = useState([]);
             const [profForm, setProfForm] = useState({
@@ -155,32 +155,44 @@
             };
 
             const handleFileUpload = (e) => {
-                const file = e.target.files[0];
-                if (!file) {
-                    setGlobalAttachment(null);
-                    return;
+                const files = Array.from(e.target.files);
+                if (files.length === 0) return;
+                
+                let hasError = false;
+
+                files.forEach(file => {
+                    if (file.size > 5 * 1024 * 1024) {
+                        showNotification(`File "${file.name}" is too large. Please keep individual attachments under 5MB.`, "error");
+                        hasError = true;
+                        return;
+                    }
+
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        const base64String = event.target.result.split(',')[1];
+                        setGlobalAttachments(prev => [...prev, {
+                            id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+                            name: file.name,
+                            type: file.type || 'application/octet-stream',
+                            data: base64String
+                        }]);
+                    };
+                    reader.onerror = () => {
+                        showNotification(`Failed to read file: ${file.name}`, "error");
+                    };
+                    reader.readAsDataURL(file);
+                });
+
+                if (!hasError) {
+                    showNotification("Attachment(s) loaded successfully.", "success");
                 }
                 
-                if (file.size > 5 * 1024 * 1024) {
-                    showNotification("File is too large. Please keep attachments under 5MB.", "error");
-                    e.target.value = '';
-                    return;
-                }
+                // Reset input so the same file can be uploaded again if removed
+                e.target.value = '';
+            };
 
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                    const base64String = event.target.result.split(',')[1];
-                    setGlobalAttachment({
-                        name: file.name,
-                        type: file.type || 'application/octet-stream',
-                        data: base64String
-                    });
-                    showNotification("Attachment loaded successfully.", "success");
-                };
-                reader.onerror = () => {
-                    showNotification("Failed to read file.", "error");
-                };
-                reader.readAsDataURL(file);
+            const removeAttachment = (id) => {
+                setGlobalAttachments(prev => prev.filter(att => att.id !== id));
             };
 
             const handleProfileChange = (e) => {
@@ -311,8 +323,8 @@
                 if (!accessToken) {
                     const mailtoLink = `mailto:${prof.profEmail}?subject=${encodeURIComponent(prof.subject)}&body=${encodeURIComponent(prof.body)}`;
                     window.open(mailtoLink, '_blank');
-                    if (globalAttachment) {
-                        showNotification("Opened in email client. Remember to attach your file manually!", "info");
+                    if (globalAttachments.length > 0) {
+                        showNotification("Opened in email client. Remember to attach your files manually!", "info");
                     }
                     return;
                 }
@@ -331,8 +343,9 @@
                     let rawEmail = '';
 
                     // Construct Multi-part MIME if attachment exists
-                    if (globalAttachment) {
+                    if (globalAttachments.length > 0) {
                         const boundary = 'kaist_mail_merge_boundary_' + Date.now().toString(16);
+                        
                         rawEmail = 
                             `To: ${prof.profEmail}\r\n` +
                             `Subject: ${safeSubject}\r\n` +
@@ -340,13 +353,18 @@
                             `--${boundary}\r\n` +
                             `Content-Type: text/plain; charset="UTF-8"\r\n` +
                             `Content-Transfer-Encoding: base64\r\n\r\n` +
-                            `${base64Body}\r\n\r\n` +
-                            `--${boundary}\r\n` +
-                            `Content-Type: ${globalAttachment.type}; name="${globalAttachment.name}"\r\n` +
-                            `Content-Disposition: attachment; filename="${globalAttachment.name}"\r\n` +
-                            `Content-Transfer-Encoding: base64\r\n\r\n` +
-                            `${globalAttachment.data}\r\n` +
-                            `--${boundary}--`;
+                            `${base64Body}\r\n\r\n`;
+
+                        globalAttachments.forEach(attachment => {
+                            rawEmail += 
+                                `--${boundary}\r\n` +
+                                `Content-Type: ${attachment.type}; name="${attachment.name}"\r\n` +
+                                `Content-Disposition: attachment; filename="${attachment.name}"\r\n` +
+                                `Content-Transfer-Encoding: base64\r\n\r\n` +
+                                `${attachment.data}\r\n\r\n`;
+                        });
+
+                        rawEmail += `--${boundary}--`;
                     } else {
                         // Standard text/plain for no attachment
                         rawEmail = 
@@ -433,7 +451,7 @@
                                 K
                             </div>
                             <div>
-                                <h1 className="text-3xl font-bold kaist-text">Mail Merge</h1>
+                                <h1 className="text-3xl font-bold kaist-text">KAIST Mail Merge</h1>
                                 <p className="text-gray-600 text-sm mt-1">Automated Cold Outreach for Research Opportunities</p>
                             </div>
                         </div>
@@ -541,32 +559,34 @@
                                     </div>
                                 </div>
 
-                                {}
+                                {/* Attachments Section */}
                                 <div className="mt-5 pt-5 border-t border-gray-100">
                                     <h3 className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-                                        <i className="fas fa-paperclip text-gray-500"></i> Global Attachment
+                                        <i className="fas fa-paperclip text-gray-500"></i> Global Attachments
                                     </h3>
-                                    <p className="text-xs text-gray-500 mb-3">Attach a Resume/CV (PDF preferred) to send with all automated emails. Resets on reload.</p>
+                                    <p className="text-xs text-gray-500 mb-3">Attach Resume/CV/Transcripts (PDF preferred) to send with all automated emails. Resets on reload.</p>
                                     
-                                    {globalAttachment ? (
-                                        <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-md p-3">
-                                            <div className="flex items-center gap-2 overflow-hidden">
-                                                <i className="fas fa-file-pdf text-red-500 text-lg"></i>
-                                                <span className="text-sm font-medium text-gray-700 truncate">{globalAttachment.name}</span>
+                                    <div className="space-y-2 mb-3">
+                                        {globalAttachments.map(attachment => (
+                                            <div key={attachment.id} className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-md p-2">
+                                                <div className="flex items-center gap-2 overflow-hidden">
+                                                    <i className="fas fa-file-pdf text-red-500 text-lg"></i>
+                                                    <span className="text-sm font-medium text-gray-700 truncate" title={attachment.name}>{attachment.name}</span>
+                                                </div>
+                                                <button onClick={() => removeAttachment(attachment.id)} className="text-gray-400 hover:text-red-500 transition px-2">
+                                                    <i className="fas fa-times"></i>
+                                                </button>
                                             </div>
-                                            <button onClick={() => setGlobalAttachment(null)} className="text-gray-400 hover:text-red-500 transition">
-                                                <i className="fas fa-times"></i>
-                                            </button>
+                                        ))}
+                                    </div>
+                                    
+                                    <label className="flex justify-center items-center px-4 py-3 bg-gray-50 border-2 border-dashed border-gray-300 rounded-md cursor-pointer hover:bg-gray-100 transition">
+                                        <div className="flex flex-col items-center gap-1 text-sm text-gray-600 font-medium">
+                                            <i className="fas fa-upload text-gray-400 text-lg mb-1"></i>
+                                            {globalAttachments.length > 0 ? "Add Another File" : "Upload Documents (PDF, DOCX)"}
                                         </div>
-                                    ) : (
-                                        <label className="flex justify-center items-center px-4 py-3 bg-gray-50 border-2 border-dashed border-gray-300 rounded-md cursor-pointer hover:bg-gray-100 transition">
-                                            <div className="flex flex-col items-center gap-1 text-sm text-gray-600 font-medium">
-                                                <i className="fas fa-upload text-gray-400 text-lg mb-1"></i>
-                                                Upload PDF Document
-                                            </div>
-                                            <input type="file" className="hidden" accept=".pdf,.doc,.docx" onChange={handleFileUpload} />
-                                        </label>
-                                    )}
+                                        <input type="file" multiple className="hidden" accept=".pdf,.doc,.docx" onChange={handleFileUpload} />
+                                    </label>
                                 </div>
                             </div>
 
@@ -728,9 +748,9 @@
                                                                 className="w-full p-3 bg-white border border-gray-300 rounded-md text-gray-700 leading-relaxed outline-none focus:border-blue-400 transition text-sm resize-none min-h-[150px] disabled:bg-gray-100"
                                                             ></textarea>
                                                         </div>
-                                                        {globalAttachment && (
+                                                        {globalAttachments.length > 0 && (
                                                             <div className="text-xs text-green-600 font-medium flex items-center gap-1">
-                                                                <i className="fas fa-paperclip"></i> "{globalAttachment.name}" will be attached automatically.
+                                                                <i className="fas fa-paperclip"></i> {globalAttachments.length} file(s) will be attached automatically.
                                                             </div>
                                                         )}
                                                     </div>
